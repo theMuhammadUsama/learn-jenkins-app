@@ -25,7 +25,7 @@ pipeline {
                 echo 'Testing our node.....'
                 sh '''
                     test -f build/index.html
-                    test npm
+                    npm test
                 '''
             }
         }
