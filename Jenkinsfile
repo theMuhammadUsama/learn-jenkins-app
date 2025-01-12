@@ -17,13 +17,6 @@ pipeline {
                     npm ci
                     npm run build
                     ls -la
-                '''
-            }
-        }
-        stage('Test') {
-            steps {
-                echo 'Testing our node.....'
-                sh '''
                     test -f build/index.html
                     npm test
                 '''
