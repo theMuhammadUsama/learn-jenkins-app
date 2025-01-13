@@ -37,7 +37,7 @@ pipeline {
         stage('E2E'){
             agent {
                 docker {
-                    image 'jacoblincool/playwright:base-light'
+                    image 'mcr.microsoft.com/playwright:v1.49.1-noble'
                     reuseNode true
                 }
             }
