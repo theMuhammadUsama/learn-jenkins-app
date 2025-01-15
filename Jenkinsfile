@@ -37,7 +37,7 @@ pipeline {
                         sh '''
                             test -f build/index.html
                             npm test
-                            #nslookup mcr.microsoft.com
+                            nslookup mcr.microsoft.com
                         '''
                     }
                      post {
