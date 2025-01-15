@@ -21,6 +21,7 @@ pipeline {
                     npm ci
                     npm run build
                     ls -la
+                    nslookup mcr.microsoft.com
                 '''
             }
         }
@@ -37,7 +38,7 @@ pipeline {
                         sh '''
                             test -f build/index.html
                             npm test
-                            nslookup mcr.microsoft.com
+                            #nslookup mcr.microsoft.com
                         '''
                     }
                      post {
