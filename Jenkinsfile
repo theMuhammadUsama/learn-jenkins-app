@@ -7,6 +7,19 @@ pipeline {
     }
 
     stages {
+        stage('AWS') {
+            agent {
+                docker {
+                    image 'amazon/aws-cli:2.23.5'
+                    args "--entrypoint=''"
+                }
+            }
+            steps{
+                sh '''
+                    aws --version
+                '''
+            }
+        }
         stage('Build') {
             agent{
                 docker {
