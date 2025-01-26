@@ -1,0 +1,50 @@
+pipeline {
+    agent any
+    environment{
+        NETLIFY_SITE_ID = '57e8f6b2-d77e-4aec-a0d2-8d566447a11d'
+        NETLIFY_AUTH_TOKEN = credentials('netlify-token')
+        REACT_APP_VERSION = "1.0.$BUILD_ID"
+    }
+
+    stages {
+        stage('AWS') {
+            agent {
+                docker {
+                    image 'amazon/aws-cli:2.23.5'
+                    reuseNode true
+                    args "--entrypoint=''"
+                }
+            }
+            environment {
+                AWS_S3_BUCKET = 'learn-jenkins-24012025'
+            }
+            steps{
+                withCredentials([usernamePassword(credentialsId: 'my-aws', passwordVariable: 'AWS_SECRET_ACCESS_KEY', usernameVariable: 'AWS_ACCESS_KEY_ID')]) {
+                    sh '''
+                        aws --version
+                        aws s3 sync build s3://learn-jenkins-24012025
+                    '''
+                }
+            }
+        }
+        stage('Build') {
+            agent{
+                docker {
+                    image 'node:18-alpine'
+                    reuseNode true
+                }
+            }
+            steps {
+                sh '''
+                    ls -la
+                    node --version
+                    npm --version
+                    npm ci
+                    npm run build
+                    ls -la
+                    #nslookup mcr.microsoft.com
+                '''
+            }
+        }
+    }
+}
