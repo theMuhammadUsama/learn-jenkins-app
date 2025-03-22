@@ -1,0 +1,78 @@
+Continous Deployment to Elastic Container Service (ECS) using Docker:
+Steps in ECS:
+i. Create the Cluster.
+ii. Create Task Definition.
+iii. Run the Task Definition.
+
+ECS Infrastructure Launch Modes:
+i. AWS Fargate(Serverless):
+Here AWS manages servers we just care about building and running our application. While its easy to use but it doesn't included in free trial.
+Calculation of Fargate: time =1h, vpu=0.25, memory=0.5Gb.
+ii. Amazon EC2 instances: 
+Here we have full control over instances which means we are responsible for managing them this includes tasks like applying security updates, maintaining servers, troubleshooting any issues and so on.
+
+Creating a Cluster in ECS: To create a cluster from AWS console we go to ECS then click create cluster and give cluster a name (LearnJenkinsApp-Cluster-Prod), Infrastructure type = AWS Fargate and click create cluster.
+
+Creating a Task Definition:
+From ECS menu we go to Task Definiton click on create a new task definition from here we select create task definition with JSON. We are using JSON because its easier to use JSON with Jenkins. Here in JSON file we in family block we add value "LearnJenkinsApp-TaskDefinition-Prod" and inside ContianerDefinitions image: "nginx:1.26-alpine" and after the image line we add a new line "portMappings": [{
+"name": "nginx-80-tcp",
+"containerPort": 80,
+"hostPort": 80,
+"protocol": "tcp",
+"appProtocol": "http"
+}] 
+after that inside "memory": "512 " and "cpu": "256" after that we copy that json file and then inside our git repo of Jenkins we create a new folder aws and it aws folder we create a file task-definition.json and in that file we paste our Task definition config after that we create our task definition.
+
+Now that we have create our task definition we now need to start a service to run that task. To do this we go into our cluster and from there we go to service create service. And in that service we keep everthing default till Application type: Service, and after that in family we select the task definition that we previously created and Revision = Latest. And then we give our service  a name (LearnJenkinsApp-Service-Prod). And finally we keep everything default and click create. After that our service is created and running we go Clusters>OurCluster>Service>OurService>Tasks>OurTask and here in networking we can see which security group is assingned to it. Then we click on that security group and edit it add a new inbound rule where type= http source=anywhere IPV4. And now we can visit our nginx running on ECS by visiting its IP. 
+
+		************** FIRST TIME **************
+
+Updating the Task Definition using AWS Cli from Jenkins:
+To update our Task definition using jenkins we need to first add AmazonECSfullAccess policy to our jenkins user then we modify our pipeline. For this I am creating a new pipeline Here in this pipeline I have one addtional env variable AWS_DEFAULT_REGION = "myRegion" and inside AWS stage in steps after aws --version command I remove s3 command and add a new command sh 'aws ecs register-task-definition --cli-input-json file://path_of_my_json_td_file'. 
+
+Updating the Service using AWS Cli from Jenkins:
+Now that we have updated our Task definition we wanna update our service using jenkins. To do this simply we add another command in our AWS stage, sh 'aws ecs update-service --cluster ourClusterName --service ourServiceName --task-definition ourTaskDefinitionWithVersion.
+
+Passing data between AWS CLI Commands:
+Here we wanna update the task definition and then using that updated task definition we wanna update service. To do this we use jq which is a tool used to parse data. Then using jq we parse revision number from task definition and use that same revision to update service. For this our first command after version command in AWS stage will be sh 'yum install jq -y'. And we modify our second command and make it a variable like this sh "LATEST_TD_REVISION=$(aws ecs register-task-definition --cli-input-json file://path_of_my_json_td_file | jq '.taskDefinition.revision')" and our third command will be (not important) sh 'echo $LATEST_TD_REVISION' our fourth command will be sh 'aws ecs update-service --cluster ourClusterName --service ourServiceName --task-definition ourTaskDefinition:$LATEST_TD_REVISION'. We also modify our args in agent to do this as root user: args "-u root --entrypoint=''"
+
+		************** SECOND TIME **************
+AWS CLI Wait Command and using variables:
+As we have seen from console that whenever we update a service it takes time to update and if wanna test our pipeline we also need to wait for service update to complete. For this we use wait command after update service command. The syntax of wait command is as follows: sh 'aws ecs wait services-stable --cluster ourClusterName --services ourServiceName. Now because we are using names of our cluster, service and TD multiple times in our pipeline that's why we wanna use variables for them so its easier to call them. So we create three additional variables in our environment: AWS_ECS_CLUSTER =ourClusterName  , AWS_ECS_SERVICE_PROD =ourServiceName and AWS_ECS_TD_PROD =ourTD. 
+
+Creating the Dockerfile:
+Till now we have used nginx dockerfile to run in our cluster but now we wanna build our own app and run it. For this we will create a dockerfile in our root directory, but before that because we already have a dockerfile of playwright in our project we create a folder named ci and move our playwright dockerfile there and also adjust our jenkins-nightly file accordingly. Now that we are ready to build dockerfile for our app that uses nginx as base image:
+FROM nginx:1.27-alpine
+
+COPY build /usr/share/nginx/html
+
+Building Docker image:
+After that now we wanna build docker image of our app so to do this, we modify our jenkinsfile-ECS here we move build stage before AWS. And after build stage we add another stage ('Build Docker Image') and inside its steps we add following command sh 'docker build -t myjenkinsapp .'. After that we also wanna push our image to ECR for this we modify our 'Build Docker Image' stage and here in agent we first copy agent block from 'Deploy to AWS' stage. After that we add another step before build sh 'amazon-linux-extras install docker' and then inside args we add a volume to map it with our local docker after root we add code '-v /var/run/docker.sock:/var/run/docker.sock'
+
+		************** THIRD TIME **************
+
+Building a custom AWS CLI image:
+As we can see that when we try to install docker in AWS it increases time of running a stage. For this we wanna create our own docker image of aws cli with all required dependencies i.e docker, jq. For this inside ci folder we can create another dockerfile named Dockerfile-aws-cli and that contains:
+FROM amazon/aws-cli
+
+RUN amazon-linux-extras install docker 
+
+RUN yum install jq -y
+
+and after that we can create a separate nightly pipeline named jenkinfile-nightly-aws-cli for building this image, which contains stage 'Building docker image' and in steps sh 'docker build -f ci/Dockerfile-aws-cli -t my-aws-cli .'. After that we create new pipeline and copy it from our jenkinsfile-ECS and use our jenkinsfile-nightly-aws-cli here. Then we run this pipeline first then we run our ECS pipeline. After that we can remove root arg from deploying to AWS stage.
+
+Tagging Docker image:
+Each time we are running our pipeline we are building image and using same name for it for that reason now we wanna tag our image. Here First we create another variable in environmet block and name it APP_NAME =  'learnjenkinsapp' and in our 'Building image' stage we modify our docker build command and use variable that we just created for the name of image and for version we use our already created varibale 'REACT_APP_VERSION' so our command might look like this: sh ' docker build -t $APP_NAME:$REACT_APP_VERSION .'.
+
+		************** THIRD TIME **************
+
+Amazon ECR - Docker Container Registry:
+As we are building our docker image and using it now we wanna push our docker image to ECR. For that first we create a private registry with same name as our APP_NAME ='learnjenkinsapp' and after creating our registry we copy it address and create a new new variable in our pipeline name AWS_DOCKER_REGISTRY. After that we modify our image tag in building image stage and here we add $AWS_DOCKER_REGISTRY/ before name after that we add another command. So the command for pushing image is sh 'docker push $AWS_DOCKER_REGISTRY/$APP_NAME:$REACT_APP_VERSION'. Now to push that image to ECR we need to authenticate with AWS ECR, for that we add another command before docker push command and the command will be: sh 'aws ecr get-login-password | docker login --username AWS --password-stdin $AWS_DOCKER_REGISTRY'. Now to push this our image we copy 'withcreds' line from deploying stage and add it in our build stage and use all our commands inside that block. We also wanna attach ContainerRegistryFullAccess policy to our jenkins user for pushing image.
+
+Referencing an ECR image in Task Definition:
+Now that we have pushed our image on ECR now we wanna use it in our cluster. First we do this by UI using Amazon Console. For this first we copy URI of image from ECR and then go to task definition select our task definition click create revision and here we paste our image URI in image URI and in Task execution role Create new role and select create. After that we go to Cluster>OurCluster>Service and here select service click update and select revision to latest. 
+Now we do this using Jenkins for this first we go to Task Defintion and select our latest task definition and view it in JSON and from here we copy value of ExecutionRole and then paste it our aws/td.json file and we also copy value of image from here and paste it also in our file.
+
+Linux sed Command for text substitution:
+Now that everything is working fine there is a slightly upgrade we wanna do. Like in our aws/td.json file we are hard coding the version and now we wanna it to update everytime with our build number. For this first we replace version in our td file with #APP_VERSION# and then we use sed command in our Deploy to AWS stage here after version command we add following command: sh 'sed -i "s/#APP_VERSION#/$REACT_APP_VERSION/g" aws/task-definition-prod.json'
+

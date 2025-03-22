@@ -1,0 +1,121 @@
+Implementing Contiouous Integration (CI) with Jenkins:
+Here First we login on github and fork the project that we will be using in this project. After that we clone that repo in our local machine and add Jenkinsfile in it. Then we copy simple hello world pipeline code and paste it in our jenkinsfile. After that we commit and push changes to our github repo. Then we create new pipeline, select pipeline script from SCM, SCM type Git, repository URL, Brach specifier */main, and script path Jenkinsfile and save it.
+Our jenkinsfile contain code like this:
+
+pipeline {
+    agent any
+
+    stages {
+        stage('Build') {
+            agent {
+                docker {
+                    image 'node:18-alpine'
+                    reuseNode true
+                }
+            }
+            steps {
+                sh '''
+                    ls -la
+                    node --version
+                    npm --version
+                    npm ci
+                    npm run build
+                    ls -la
+                '''
+            }
+        }
+    }
+}
+
+here npm ci installs all dependencies, and npm run build will build. We use reuseNode in docker block which means that we are instructing docker to use same workspace and don't create seperate workspace. Now after that we also wanna add test stage in our jenkinsfile, to do this we create another stage named test after build and add tests which we wanna run like sh ' test -f build/index.html' and sh 'npm test'. After that we wanna use junit test in our pipeline. To do this we add post method after stages and add our junit test like this:
+post {
+        always{
+            junit 'test-results/junit.xml'
+        }
+    }
+Using comments in Pipeline: 
+We can use two forward slashes // to add comment, and if we wanna add multi line comment we can use /* line1 line2 line3 */.
+
+Final Pipeline of CI:
+
+pipeline {
+    agent any
+
+    stages {
+
+        stage('Build') {
+            agent {
+                docker {
+                    image 'node:18-alpine'
+                    reuseNode true
+                }
+            }
+            steps {
+                sh '''
+                    ls -la
+                    node --version
+                    npm --version
+                    npm ci
+                    npm run build
+                    ls -la
+                '''
+            }
+        }
+
+        stage('Tests') {
+            parallel {
+                stage('Unit tests') {
+                    agent {
+                        docker {
+                            image 'node:18-alpine'
+                            reuseNode true
+                        }
+                    }
+
+                    steps {
+                        sh '''
+                            #test -f build/index.html
+                            npm test
+                        '''
+                    }
+                    post {
+                        always {
+                            junit 'jest-results/junit.xml'
+                        }
+                    }
+                }
+
+                stage('E2E') {
+                    agent {
+                        docker {
+                            image 'mcr.microsoft.com/playwright:v1.39.0-jammy'
+                            reuseNode true
+                        }
+                    }
+
+                    steps {
+                        sh '''
+                            npm install serve
+                            node_modules/.bin/serve -s build &
+                            sleep 10
+                            npx playwright test  --reporter=html
+                        '''
+                    }
+
+                    post {
+                        always {
+                            publishHTML([allowMissing: false, alwaysLinkToLastBuild: false, keepAll: false, reportDir: 'playwright-report', reportFiles: 'index.html', reportName: 'Playwright HTML Report', reportTitles: '', useWrapperFileDirectly: true])
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+Here we running two tests Unit and E2E. We running them both parallel we generating html report for E2E. We running our serve locally here in E2E and running playright test in html report.
+
+NOTE: Here when I try to pull playwright image from microsoft I was getting an error so, to overcome that I first used a command in build stage to lookup for mcr.microsoft and command was like nslookup mcr.microsoft.com. And one additional thing because I am using node 18 that's why I used playwright's older version.
+
+
+

@@ -1,0 +1,52 @@
+Continous Deployment to Amazon Web Services (AWS):
+Now that we wanna deploy our app to AWS using Jenkins so we start by installing aws-cli and using it to interact with AWS. First we add a new stage in our pipeline and name of stage is 'AWS':
+ stage('AWS') {
+            agent {
+                docker {
+                    image 'amazon/aws-cli:2.23.5'
+                    args "--entrypoint=''"
+                }
+            }
+            steps{
+                sh '''
+                    aws --version
+                '''
+            }
+        }
+Here using args we are giving argument to use null entrypoint so that it don't stay in interactive state.
+After that we have installed aws-cli now we want to interact with our own aws console using cli. To do this first we need access key of our console. For this lab we only want to access s3 files. So for this we create a new IAM user. User configuration will be like this: name= Jenkins, root permission = NO, attach policy= full S3access. After that we have created our user we can go to users>jenkins>security>create access key>cli. Now that we have access keys for our IAM user we go to Manage Jenkins>Credentials>System>Global>credentials and here we click add credentials select type username and password and here add our access keys.
+Now that we have stored our creds in Jenkins we can use pipeline syntax gererator to generate a code block here in snippet generator we select withCredentials as sample step and in bindings we select username and password separated and Username variable =AWS_ACCESS_KEY_ID and Password variable = AWS_SECRET_ACCESS_KEY (from aws-cli docs) and in credentials we select our creds that we saved in jenkins credentials. Then we click generate pipeline script. Then we use this script in our pipeline like this insde steps:
+withCredentials([usernamePassword(credentialsId: 'my-aws', passwordVariable: 'AWS_SECRET_ACCESS_KEY', usernameVariable: 'AWS_ACCESS_KEY_ID')]) {
+                    sh '''
+                        aws --version
+                        aws s3 ls
+                    '''
+                }
+Now we try to copy a file into our s3 bucket. To do this we modify our code block inside creds. Here first we create a file then create a variable name for our s3 bucket than copy that file to our s3 bucket like this:
+environment {
+                AWS_S3_BUCKET = 'learn-jenkins-24012025'
+            }
+            steps{
+                withCredentials([usernamePassword(credentialsId: 'my-aws', passwordVariable: 'AWS_SECRET_ACCESS_KEY', usernameVariable: 'AWS_ACCESS_KEY_ID')]) {
+                    sh '''
+                        aws --version
+                        echo "Hello S3!" > index.html
+                        aws s3 cp index.html s3://$AWS_S3_BUCKET/index.html
+                    '''
+                }
+            }
+
+Hosting a Website on S3:
+Now that we have created our s3 bucket and now we wanna use it a website hosting. To do this from AWS console we go to our bucket and here first inside properties we enable static web hosting, second we go to permissions and from here we disable block public access and third from permissions we add new bucket policy like this: Here from policy generator we search s3 and from object GetObject then we edit our policy a bit and in Principal we replace {} with "*" and finally select add resource and resource=s3 and type=object, then edit it with our own bucket name and replace object with * (all objects). Our final policy might look like this:
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "Statement1",
+            "Effect": "Allow",
+            "Principal": "*",
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::learn-jenkins-24012025/*"
+        }
+    ]
+}

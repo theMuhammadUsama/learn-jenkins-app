@@ -1,0 +1,100 @@
+Implementing Continous Deployment CD:
+For deployment we are using netlify, because it allows user to deploy personal projects for free. First we create account and deploy simple html file there manually to see if it is working. After that we install netlify cli which is cli tool of netlify in our project. To do this we create another stage named deploy in our pipeline. Inside that stage we use docker and create similar node image as we created in build stage. In steps we use bash to install and run our commads. Here we use following commands: 
+nmp install netlify-cli -> to install netlify cli 
+node_modules/.bin/netlify --version -> to see the version ofnetlify
+echo "Deploying to Production. Site ID: $NETLIFY_SITE_ID"
+node_modules/.bin/netlify status -> to see the status of netlify
+node_modules/.bin/netlify deploy --dir=build --prod
+
+Here we after installing netlify we add two environment variables in our pipeline to define Site ID of our project that we created and our auth token to authienticate with netlify. To generate our auth token from netlify first we go to over user i.e Usama>applications>personal access token. After that we don't store our token directly into our pipeline instead we go to Manage Jenkins>credentials>system>Global Creds>Add credentials. Here from drop down we select secret text and give it name netlify-token and paste our token in Secret. After that we have saved our token in jenkins we add two environment variables in our script. In starting of our script after pipeline and agent any we add variables like:
+pipeline {
+    agent any
+    environment{
+        NETLIFY_SITE_ID = '57e8f6b2-d77e-4aec-a0d2-8d566447a11d'
+        NETLIFY_AUTH_TOKEN = credentials('netlify-token')
+    }
+
+After that we have deployed our app now we want to add build trigger in our pipeline that will automatically start pipeline whenever changes are made in github. To do this we select Poll SCM option in our project configuration, and here I want to check each minute if there are any changes made in my source code. So in Source I add * * * * * for all MINUTE HOUR DOM MONTH DOW. After that I also wanna  test my prod so for that we'll add another stage named "Prod E2E". Here inside it we are using environment variable of URL of our site which we wanna test because inside playwright.config.js file of our project we have added base URL like this:
+   baseURL: process.env.CI_ENVIRONMENT_URL || 'http://localhost:3000',
+here localhost will check our locally build code and CI_ENV will be address of our prod
+
+stage('Prod E2E') {
+            agent {
+                docker {
+                    image 'mcr.microsoft.com/playwright:v1.39.0-jammy'
+                    reuseNode true
+                }
+            }
+
+            environment {
+                CI_ENVIRONMENT_URL = 'PUT YOUR NETLIFY SITE URL HERE'
+            }
+
+            steps {
+                sh '''
+                    npx playwright test  --reporter=html
+                '''
+            }
+
+            post {
+                always {
+                    publishHTML([allowMissing: false, alwaysLinkToLastBuild: false, keepAll: false, reportDir: 'playwright-report', reportFiles: 'index.html', reportName: 'Playwright E2E', reportTitles: '', useWrapperFileDirectly: true])
+                }
+            }
+Now as a best practice we wanna stage our project before deploying it, staging means we will deploy it and only we can see it and make sure everything is working. For that we add "Deploy Staging" stage before "Deploy Prod" stage. And our code for staging stage might look like this:
+        stage('Deploy staging') {
+            agent {
+                docker {
+                    image 'node:18-alpine'
+                    reuseNode true
+                }
+            }
+            steps {
+                sh '''
+                    npm install netlify-cli
+                    node_modules/.bin/netlify --version
+                    echo "Deploying to staging. Site ID: $NETLIFY_SITE_ID"
+                    node_modules/.bin/netlify status
+                    node_modules/.bin/netlify deploy --dir=build
+                '''
+            }
+        }
+Here we doing everything like deploy prod except we are not using --prod flag in deploy. What it will do is netlify will auto assign some random draft URL to our staging deployment and our project will be deployed there. So now that we have added staging stage how can we make sure that first we check that everything in staging deploy working properly and after that jenkins will move to prod stage. We can overcome this problem by using input, what it will do is here we add a check button that will pause pipeline after staging and wait until we click ok button, and then jenkins move to prod deploy. For this we add another stage named "Approval" after staging and before prod. It might look like this:
+
+stage('Approval') {
+            steps {
+                timeout(time: 15, unit: 'MINUTES') {
+                    input message: 'Ready to Deploy?', ok: 'Yes I want to deploy.'
+
+                }
+                
+            }
+        }
+Here using pipeline syntax generator we generated input and timeout code snippets, the timeout will wait for 15 minutes so if we click ok in 15 minutes then the jenkins move to prod and if we click abort then pipeline will be aborted and jenkins don't move to prod also if we didn't click any button within specified timeout the pipeline will automatically aborted.
+
+Now we want to test our staging envrionment also with E2E test, to do this we first we copy Prod E2E and paste it after 'Deploy Staging' stage and inside it 
+our shell commands are:
+steps {
+                sh '''
+                    npm install netlify-cli node-jq
+                    node_modules/.bin/netlify --version
+                    echo "Deploying to Production. Site ID: $NETLIFY_SITE_ID"
+                    node_modules/.bin/netlify status 
+                    node_modules/.bin/netlify deploy --dir=build --json > deploy-output.json
+                '''
+                script{
+                    env.STAGING_URL = sh (script: "node_modules/.bin/node-jq -r 'deploy_url' --json deploy-output.json", returnStdout: true)
+                }
+            }
+Here:
+i. we installing netlify-cli and node-jq, node-jq is tool which is used to parse json data.
+iv. Here we are saving our deploy data in a file in json syntax.
+And after that inside steps we are creating an environment variable that will extract value of 'deploy_url' from our file which we saved earlier. 
+
+After that inside our 'E2E staging' stage we are creating an envrionment variable and setting its value to our previous variable that contain the address of our staging deplyed website:
+ environment {
+                CI_ENVIRONMENT_URL = "$env.STAGING_URL"
+            }
+
+
+

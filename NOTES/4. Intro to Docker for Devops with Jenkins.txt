@@ -1,0 +1,168 @@
+Intro to docker for DevOps:
+First we create a dockerfile in our project for the playwright image. The dockerfile contains:
+FROM mcr.microsoft.com/playwright:v1.39.0-jammy
+RUN npm install -g netlify-cli node-jq serve
+
+Now that we have created our dockerfile we add a new stage in our pipeline for building docker image of playwright. That stage will contain:
+ stage('Docker'){
+            steps{
+                sh 'docker build -t my-playwright .'
+            }
+        }
+Now that we have create our image of playwright we don't need to create it each time inside our pipeline. That's why we will replace our image name with myplaywright inside in our pipeline in bot prod and staging stages. And because we have installed our tools like netlify-cli, node-jq and serve in our image globally we don't need to run them locally. 
+
+So our final jenkinsfile look like this:
+pipeline {
+    agent any
+    environment{
+        NETLIFY_SITE_ID = '57e8f6b2-d77e-4aec-a0d2-8d566447a11d'
+        NETLIFY_AUTH_TOKEN = credentials('netlify-token')
+        REACT_APP_VERSION = "1.0.$BUILD_ID"
+    }
+
+    stages {
+        stage('Build') {
+            agent{
+                docker {
+                    image 'node:18-alpine'
+                    reuseNode true
+                }
+            }
+            steps {
+                sh '''
+                    ls -la
+                    node --version
+                    npm --version
+                    npm ci
+                    npm run build
+                    ls -la
+                    #nslookup mcr.microsoft.com
+                '''
+            }
+        }
+        stage('Test'){
+            parallel{
+                stage('Unit Test'){
+                    agent {
+                        docker {
+                            image 'node:18-alpine'
+                            reuseNode true
+                        }
+                    }
+                    steps{
+                        sh '''
+                            test -f build/index.html
+                            npm test
+                            #nslookup mcr.microsoft.com
+                        '''
+                    }
+                     post {
+                        always{
+                            junit 'jest-results/junit.xml'
+                            }
+                        }
+                }
+                stage('E2E'){
+                    agent {
+                        docker {
+                            image 'my-playwright'
+                            reuseNode true
+                        }
+                    }
+                    steps{
+                        sh '''
+                            serve -s build &
+                            sleep 10
+                            npx playwright test --reporter=html
+                        '''
+                    }
+                    post {
+                        always{
+                            publishHTML([allowMissing: false, alwaysLinkToLastBuild: false, keepAll: false, reportDir: 'playwright-report', reportFiles: 'index.html', reportName: 'Playwright Local Report', reportTitles: '', useWrapperFileDirectly: true])
+                            }
+                        }
+                }
+
+            }
+        }
+        stage('Deploy Staging') {
+            agent{
+                docker {
+                    image 'my-playwright'
+                    reuseNode true
+                }
+            }
+            environment {
+                CI_ENVIRONMENT_URL = "STAGING_URL_TO_BE_SET"
+            }
+            steps {
+                sh '''
+                    netlify --version
+                    echo "Deploying to Production. Site ID: $NETLIFY_SITE_ID"
+                    netlify status 
+                    netlify deploy --dir=build --json > deploy-output.json
+                    CI_ENVIRONMENT_URL=$(node-jq -r '.deploy_url'  deploy-output.json)
+                    npx playwright test --reporter=html
+                    '''
+
+            }
+            post {
+                always{
+                    publishHTML([allowMissing: false, alwaysLinkToLastBuild: false, keepAll: false, reportDir: 'playwright-report', reportFiles: 'index.html', reportName: 'Staging E2E Report', reportTitles: '', useWrapperFileDirectly: true])
+                    }
+                }
+        }
+        
+        stage('Approval') {
+            steps {
+                timeout(time: 15, unit: 'MINUTES') {
+                    input message: 'Ready to Deploy?', ok: 'Yes I want to deploy.'
+
+                }
+                
+            }
+        }
+        stage('Deploy Production') {
+            agent{
+                docker {
+                    image 'my-playwright'
+                    reuseNode true
+                }
+            }
+            environment {
+                CI_ENVIRONMENT_URL = 'https://dulcet-genie-2942e3.netlify.app'
+            }
+            steps {
+                sh '''
+                    netlify --version
+                    echo "Deploying to Production. Site ID: $NETLIFY_SITE_ID"
+                    netlify status 
+                    netlify deploy --dir=build --prod
+                    npx playwright test --reporter=html
+                '''
+            }
+            post {
+                always{
+                    publishHTML([allowMissing: false, alwaysLinkToLastBuild: false, keepAll: false, reportDir: 'playwright-report', reportFiles: 'index.html', reportName: 'Prod E2E Report', reportTitles: '', useWrapperFileDirectly: true])
+                    }
+                }
+    }
+   
+  }
+}
+
+Here we combined our both test and build stages for both our staging and prod. And we also have created separate file for docker image of playwright. The nightly-Jenkinsfile might look like this:
+pipeline {
+    agent any
+
+    stages {
+        stage('Docker'){
+            steps{
+                sh 'docker build -t my-playwright .'
+            }
+        }
+    }
+}
+
+We created another jenkins project for our docker image of playwright. To do this we click create new item, then name = nightly-docker-build, then select type pipeline, and then copy from learn-jenkins-app(our main jenkins project). And in our docker pipeline we select build periodically with this configuration: H 3 * * 1-6. This will run pipeline automatically in night around 3 am.
+NOTE: Because our jenkins is locally installed and in night if our PC is off it won't run, but on server it will work fine.
